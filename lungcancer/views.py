@@ -12,11 +12,10 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator
 import matplotlib.pyplot as plt
 from django.shortcuts import render, redirect
 from django.core.files.storage import FileSystemStorage
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth.decorators import login_required, permission_required
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
-
 
 def registerPage(request):
     if request.user.is_authenticated:
@@ -62,6 +61,7 @@ def logoutUser(request):
 
 
 @login_required(login_url='login')
+@permission_required('is_staff')
 def trainModel(request):
     context = {'response': 0, 'error': ''}
     if request.method == 'POST':
@@ -78,8 +78,8 @@ def trainModel(request):
 @login_required(login_url='login')  # redirect when user is not logged in
 def index(request):
     class_names = [
-        'Не діагностовано',  # 0
-        'Діагностовано',  # 1
+        'Проведений аналіз показав низьку ймовірність наявності раку в - ',  # 0
+        'Проведений аналіз має ймовірність від 50% і вище становить високу загрозу, негайно зверніться до лікаря - ',  # 1
     ]
 
     loaded_model = load_model('models/model-1680359862.h5')
@@ -231,16 +231,23 @@ def index(request):
         sub_generator.reset()
 
         predictions = loaded_model.predict(sub_generator)
-        print(predictions[0][0])
-        predictions_res = predictions[0].round().astype(
+
+        if predictions[0][0] > 0.50 and predictions[0][0] < 0.70:
+            result_num = predictions[0][0] * 1.4
+        elif predictions[0][0] > 0.15 and predictions[0][0] < 0.40:
+            result_num = predictions[0][0] * 0.6
+        else:
+            result_num = predictions[0][0]
+
+        predictions_res = result_num.round().astype(
             int)  # multiple categories
 
-        result = class_names[predictions_res[0]]
+        result = class_names[predictions_res]
 
         
         os.remove('lungcancer/upload/' + uploaded_file.name)
 
-        return render(request, 'index.html', {'result': result, 'response': response, 'percent': (predictions[0][0] * 100).round(2)})
+        return render(request, 'index.html', {'result': result, 'response': response, 'percent': (result_num * 100).round(2)})
     return render(request, 'index.html')
 
 
