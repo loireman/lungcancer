@@ -27,7 +27,6 @@
         margin: 2rem auto;
         display: flex;
         flex-direction: column;
-        width: 100%;
         max-width: 800px;
         background-color: #fff;
         border-radius: 10px;
@@ -117,8 +116,27 @@
         outline: none;
         opacity: 0;
       }
+      button:disabled,
+      button[disabled] {
+        border: 1px solid #999999;
+        background-color: #cccccc;
+        color: #666666;
+        &:hover {
+          border: 1px solid #999999;
+          background-color: #cccccc;
+          color: #666666;
+        }
+        &:focus {
+          outline: 0;
+        }
+      }
     </style>
-
+    <div class="card">
+      <div class="card-heading">
+        Привіт, {{ request.user }}
+        <a href="{% url 'logout' %}">Вийти</a>
+      </div>
+    </div>
     <div class="card">
       <h2 class="card-heading">Дослідження раку легень</h2>
       <div class="card-form">
@@ -133,15 +151,124 @@
           <p class="file-text">
             Перетягніть фото у форматі .dcm або натисніть щоб завантажити його
           </p>
-          <button type="submit" class="action-button">Завантажити</button>
+          <button
+            onclick="change(event)"
+            disabled
+            type="submit"
+            id="submit"
+            class="action-button"
+          >
+            Завантажити
+          </button>
         </form>
         <div style="padding: 6rem"></div>
       </div>
     </div>
+    {% if error %}
+    <div
+      style="
+        width: fit-content;
+        background-color: #ffd0d0;
+        padding: 1rem 2rem;
+        margin: 2rem;
+        border: 1px solid red;
+        border-radius: 30px;
+        color: red;
+        font-size: x-large;
+      "
+    >
+      {{ error }}
+    </div>
+    {% endif %} 
     {% if response %}
     <div class="card">
       <h2 class="card-heading">Останній результат</h2>
-      <p style="font-size: 36px">{{ percent }}</p>
+      <div
+        style="height: 8rem; width: 32rem; max-width: 90%; margin: 2rem auto"
+      >
+        <div style="position: relative">
+          <div
+            style="
+              position: absolute;
+              top: 2rem;
+              height: 3rem;
+              width: 100%;
+              background: linear-gradient(
+                90deg,
+                #28ac35 0%,
+                #dfffe2 38.2%,
+                #ffe6e6 59.38%,
+                #ff0000 100%,
+                #ff0000 100%
+              );
+              border-radius: 15px;
+            "
+          ></div>
+          <p
+            style="
+              position: absolute;
+              left: -1rem;
+              top: -0.25rem;
+              font-weight: 600;
+            "
+          >
+            Позитивно
+          </p>
+          <p
+            style="
+              position: absolute;
+              right: -1rem;
+              top: -0.25rem;
+              font-weight: 600;
+            "
+          >
+            Негативно
+          </p>
+          <p
+            style="
+              font-size: 24px;
+              padding: 0.125rem 2rem;
+              width: fit-content;
+              background-color: #d9d9d9;
+              position: absolute;
+              border-radius: 9999px;
+              top: -2.5rem;
+              left: calc(50% - 4rem);
+              font-weight: 600;
+            "
+          >
+            {{ percent }}
+          </p>
+          <div style="position: absolute; top: 5rem; left: {{ percent }}%">
+            <svg
+              style="position: absolute; left: -8px"
+              width="16"
+              height="14"
+              viewBox="0 0 16 14"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path d="M8 0L15.7942 13.5H0.205771L8 0Z" fill="black" />
+            </svg>
+            <div
+              style="
+                position: absolute;
+                width: 48px;
+                height: 0px;
+                left: -25px;
+                top: -24px;
+                border: 1px solid #000000;
+                transform: rotate(-90deg);
+              "
+            ></div>
+            <p
+              style="position: absolute; top: 0; left: -2rem; font-weight: 600"
+            >
+              Результат
+            </p>
+          </div>
+        </div>
+      </div>
       <div style="display: flex; padding: 4px; align-items: center">
         <img
           width="256"
@@ -215,10 +342,15 @@
     {% endif %}
 
     <script>
+      function change() {
+        $("#submit").text("Фото оброблюється мережею");
+      }
+
       $(document).ready(function () {
         $("#fileinput").change(function () {
           var fileName = $(this).val().split("\\").pop();
           $("form p").text("Файл обрано: " + fileName);
+          $("#submit").attr("disabled", false);
         });
       });
     </script>

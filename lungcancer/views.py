@@ -10,15 +10,78 @@ import scipy.ndimage as ndimage
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 import matplotlib.pyplot as plt
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.core.files.storage import FileSystemStorage
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth import authenticate, login, logout
+from django.contrib import messages
 
+
+def registerPage(request):
+    if request.user.is_authenticated:
+        return redirect('index')
+    else:
+        form = UserCreationForm()
+
+        if request.method == 'POST':
+            form = UserCreationForm(request.POST)
+            if form.is_valid():
+                form.save()
+                user = form.cleaned_data.get('username')
+                messages.success(request, "Аккаунт створено для: " + user)
+                return redirect('login')
+
+        context = {'form': form}
+        return render(request, 'accounts/register.html', context)
+
+
+def loginPage(request):
+    if request.user.is_authenticated:
+        return redirect('index')
+    else:
+        if request.method == 'POST':
+            username = request.POST.get('username')
+            password = request.POST.get('password')
+
+            user = authenticate(request, username=username, password=password)
+
+            if user is not None:
+                login(request, user)
+                return redirect('index')
+            else:
+                messages.info(request, 'Ім\'я і/або пароль невірні')
+
+        context = {}
+        return render(request, 'accounts/login.html', context)
+
+
+def logoutUser(request):
+    logout(request)
+    return redirect('login')
+
+
+@login_required(login_url='login')
+def trainModel(request):
+    context = {'response': 0, 'error': ''}
+    if request.method == 'POST':
+        file = request.FILES.get('document')
+        if file and file.name.endswith('.zip'):
+            # Handle the uploaded zip file here
+            context['response'] = 1
+        else: 
+            context['error'] = 'Помилка: Файл не є .zip'
+            return render(request, 'training.html', context)
+    return render(request, 'training.html', context)
+
+
+@login_required(login_url='login')  # redirect when user is not logged in
 def index(request):
     class_names = [
-    'Не діагностовано',  # 0
-    'Діагностовано',  # 1
+        'Не діагностовано',  # 0
+        'Діагностовано',  # 1
     ]
-    
+
     loaded_model = load_model('models/model-1680359862.h5')
 
     # load weights into new model
@@ -28,34 +91,34 @@ def index(request):
 
     # Load the scans in given folder path
     def load_scan(path):
-        slices = [dicom.read_file((path),force = True)]
-            
+        slices = [dicom.read_file((path), force=True)]
+
         return slices
 
     def get_pixels_hu(scans):
         image = np.stack([s.pixel_array for s in scans])
-        # Convert to int16 (from sometimes int16), 
+        # Convert to int16 (from sometimes int16),
         # should be possible as values should always be low enough (<32k)
         image = image.astype(np.int16)
 
         # Set outside-of-scan pixels to 0
         # The intercept is usually -1024, so air is approximately 0
         image[image == -2000] = 0
-        
+
         # Convert to Hounsfield units (HU)
         intercept = scans[0].RescaleIntercept
         slope = scans[0].RescaleSlope
-        
+
         if slope != 1:
             image = slope * image.astype(np.float64)
             image = image.astype(np.int16)
-            
+
         image += np.int16(intercept)
-        
+
         return np.array(image, dtype=np.int16)
 
     def generate_markers(image):
-        #Creation of the internal Marker
+        # Creation of the internal Marker
         marker_internal = image < -400
         marker_internal = segmentation.clear_border(marker_internal)
         marker_internal_labels = measure.label(marker_internal)
@@ -64,67 +127,69 @@ def index(request):
         if len(areas) > 2:
             for region in measure.regionprops(marker_internal_labels):
                 if region.area < areas[-2]:
-                    for coordinates in region.coords:                
-                        marker_internal_labels[coordinates[0], coordinates[1]] = 0
+                    for coordinates in region.coords:
+                        marker_internal_labels[coordinates[0],
+                                               coordinates[1]] = 0
         marker_internal = marker_internal_labels > 0
-        #Creation of the external Marker
+        # Creation of the external Marker
         external_a = ndimage.binary_dilation(marker_internal, iterations=10)
         external_b = ndimage.binary_dilation(marker_internal, iterations=55)
         marker_external = external_b ^ external_a
-        #Creation of the Watershed Marker matrix
+        # Creation of the Watershed Marker matrix
         marker_watershed = np.zeros((512, 512), dtype=np.int)
         marker_watershed += marker_internal * 255
         marker_watershed += marker_external * 128
-        
+
         return marker_internal, marker_external, marker_watershed
 
     def seperate_lungs(image):
-        #Creation of the markers as shown above:
-        marker_internal, marker_external, marker_watershed = generate_markers(image)
-        
-        #Creation of the Sobel-Gradient
+        # Creation of the markers as shown above:
+        marker_internal, marker_external, marker_watershed = generate_markers(
+            image)
+
+        # Creation of the Sobel-Gradient
         sobel_filtered_dx = ndimage.sobel(image, 1)
         sobel_filtered_dy = ndimage.sobel(image, 0)
         sobel_gradient = np.hypot(sobel_filtered_dx, sobel_filtered_dy)
         sobel_gradient *= 255.0 / np.max(sobel_gradient)
-        
-        #Watershed algorithm
+
+        # Watershed algorithm
         watershed = segmentation.watershed(sobel_gradient, marker_watershed)
-        
-        #Reducing the image created by the Watershed algorithm to its outline
-        outline = ndimage.morphological_gradient(watershed, size=(3,3))
+
+        # Reducing the image created by the Watershed algorithm to its outline
+        outline = ndimage.morphological_gradient(watershed, size=(3, 3))
         outline = outline.astype(bool)
-        
-        #Performing Black-Tophat Morphology for reinclusion
-        #Creation of the disk-kernel and increasing its size a bit
+
+        # Performing Black-Tophat Morphology for reinclusion
+        # Creation of the disk-kernel and increasing its size a bit
         blackhat_struct = [[0, 0, 1, 1, 1, 0, 0],
-                        [0, 1, 1, 1, 1, 1, 0],
-                        [1, 1, 1, 1, 1, 1, 1],
-                        [1, 1, 1, 1, 1, 1, 1],
-                        [1, 1, 1, 1, 1, 1, 1],
-                        [0, 1, 1, 1, 1, 1, 0],
-                        [0, 0, 1, 1, 1, 0, 0]]
-        
+                           [0, 1, 1, 1, 1, 1, 0],
+                           [1, 1, 1, 1, 1, 1, 1],
+                           [1, 1, 1, 1, 1, 1, 1],
+                           [1, 1, 1, 1, 1, 1, 1],
+                           [0, 1, 1, 1, 1, 1, 0],
+                           [0, 0, 1, 1, 1, 0, 0]]
+
         blackhat_struct = ndimage.iterate_structure(blackhat_struct, 8)
-        #Perform the Black-Hat
+        # Perform the Black-Hat
         outline += ndimage.black_tophat(outline, structure=blackhat_struct)
-        
-        #Use the internal marker and the Outline that was just created to generate the lungfilter
+
+        # Use the internal marker and the Outline that was just created to generate the lungfilter
         lungfilter = np.bitwise_or(marker_internal, outline)
-        #Close holes in the lungfilter
-        #fill_holes is not used here, since in some slices the heart would be reincluded by accident
-        lungfilter = ndimage.morphology.binary_closing(lungfilter, structure=np.ones((7,7)), iterations=3)
-        
-        #Apply the lungfilter (note the filtered areas being assigned -2000 HU)
+        # Close holes in the lungfilter
+        # fill_holes is not used here, since in some slices the heart would be reincluded by accident
+        lungfilter = ndimage.morphology.binary_closing(
+            lungfilter, structure=np.ones((7, 7)), iterations=3)
+
+        # Apply the lungfilter (note the filtered areas being assigned -2000 HU)
         segmented = np.where(lungfilter == 1, image, -2000*np.ones((512, 512)))
 
-        #### nodule
+        # nodule
         lung_nodule_1 = np.bitwise_or(marker_internal, image)
-        lung_nodule = np.where(lungfilter == 1, lung_nodule_1, np.zeros((512, 512)))
+        lung_nodule = np.where(
+            lungfilter == 1, lung_nodule_1, np.zeros((512, 512)))
 
-        
         return segmented, lung_nodule, lungfilter, outline, watershed, sobel_gradient, marker_internal, marker_external, marker_watershed
-
 
     def preprocess_image(filename):
         test_patient_scans = load_scan(filename)
@@ -135,42 +200,54 @@ def index(request):
         sobel_gradient = seperate_lungs(img)[5]
         img_watershed = seperate_lungs(img)[8]
         new_img = cv2.resize(seg_img, (224, 224))
-        new_img = np.expand_dims(new_img,axis = -1)
+        new_img = np.expand_dims(new_img, axis=-1)
         data.append(new_img)
 
         return np.array(data), img, seg_img, sobel_gradient, img_watershed
-    
+
     if request.method == 'POST':
+        response = 0
+        uploaded_file = request.FILES['document']
+        if uploaded_file and uploaded_file.name.endswith('.dcm'):
+            # Handle the uploaded zip file here
+            response = 1
+        else: 
+            error = 'Помилка: Файл не є .dcm'
+            return render(request, 'index.html', {'response': response, 'error': error})
 
-            uploaded_file = request.FILES['document']
-            fs = FileSystemStorage('lungcancer/upload/')
-            fs.save(uploaded_file.name, uploaded_file)
+        fs = FileSystemStorage('lungcancer/upload/')
+        fs.save(uploaded_file.name, uploaded_file)
 
-            data, rawdata, segdata, sobeldata, watersheddata = preprocess_image('lungcancer/upload/' + uploaded_file.name)
+        data, rawdata, segdata, sobeldata, watersheddata = preprocess_image(
+            'lungcancer/upload/' + uploaded_file.name)
 
-            plt.imsave('lungcancer/upload/myimage1.png', rawdata, cmap='gray')
-            plt.imsave('lungcancer/upload/myimage2.png', segdata, cmap='gray')
-            plt.imsave('lungcancer/upload/myimage3.png', sobeldata, cmap='gray')
-            plt.imsave('lungcancer/upload/myimage4.png', watersheddata, cmap='gray')
+        plt.imsave('lungcancer/upload/myimage1.png', rawdata, cmap='gray')
+        plt.imsave('lungcancer/upload/myimage2.png', segdata, cmap='gray')
+        plt.imsave('lungcancer/upload/myimage3.png', sobeldata, cmap='gray')
+        plt.imsave('lungcancer/upload/myimage4.png',
+                   watersheddata, cmap='gray')
 
-            sub_generator = datagen.flow(data, shuffle=False)
-            sub_generator.reset()
+        sub_generator = datagen.flow(data, shuffle=False)
+        sub_generator.reset()
 
-            predictions = loaded_model.predict(sub_generator)
-            print(predictions[0][0])
-            predictions_res = predictions[0].round().astype(int)  # multiple categories
+        predictions = loaded_model.predict(sub_generator)
+        print(predictions[0][0])
+        predictions_res = predictions[0].round().astype(
+            int)  # multiple categories
 
-            result = class_names[predictions_res[0]]
+        result = class_names[predictions_res[0]]
 
-            os.remove('lungcancer/upload/' + uploaded_file.name)
+        
+        os.remove('lungcancer/upload/' + uploaded_file.name)
 
-            return render(request, 'index.html', {'result': result, 'response': 1, 'percent': (predictions[0][0] * 100).round(2)})
+        return render(request, 'index.html', {'result': result, 'response': response, 'percent': (predictions[0][0] * 100).round(2)})
     return render(request, 'index.html')
 
 
 def serve_photo(request, filename):
     # Construct the path to the image file on disk
-    file_path = os.path.join(settings.BASE_DIR, 'lungcancer', 'upload', filename)
+    file_path = os.path.join(
+        settings.BASE_DIR, 'lungcancer', 'upload', filename)
 
     # Open the image file in binary mode
     with open(file_path, 'rb') as f:
